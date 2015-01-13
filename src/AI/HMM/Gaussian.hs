@@ -5,12 +5,10 @@
 {-# LANGUAGE OverloadedLists #-}
 module AI.HMM.Gaussian where
 
-import Numeric.LinearAlgebra.HMatrix (Matrix, Vector, (<>), invlndet, (!), tr, asRow, vector, matrix, reshape, size, flatten)
-import AI.Clustering.KMeans
-import AI.HMM.Class
 import Algorithms.GLasso (glasso)
+import Numeric.LinearAlgebra.HMatrix (Matrix, Vector, (<>), invlndet, (!), tr, asRow, vector, matrix, reshape, size, flatten)
 import Control.Monad.Primitive (PrimMonad, PrimState)
-import Control.Monad (forM_)
+import Control.Monad (forM_, foldM)
 import Control.Monad.ST (ST,runST)
 import Data.Function (on)
 import Data.List (groupBy, sortBy)
@@ -22,33 +20,16 @@ import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as UM
 import Statistics.Sample (meanWeighted, mean)
 import System.Random.MWC
 
+import AI.Clustering.KMeans
+import AI.Function
+import AI.HMM.Class
+
 import Debug.Trace
 
--- | multivariate normal distribution
-data MVN = MVN
-    { _mean :: !(Vector Double)
-    , _cov :: !(Matrix Double)
-    , _invcov :: !(Matrix Double)
-    , _logdet :: !Double  -- ^ log determinant of covariance matrix
-    } deriving (Show)
-
-mvn :: Vector Double -> Matrix Double -> MVN
-mvn m cov = MVN m cov invcov logdet
-  where
-    (invcov, (logdet, _)) = invlndet cov
-
--- | log probability of MVN
-logPDF :: MVN -> Vector Double -> Double
-logPDF (MVN m _ invcov logdet) x = -0.5 * ( d * log (2*pi) + logdet
-                                        + (x' <> invcov <> tr x') ! 0 ! 0
-                                        )
-  where
-    x' = asRow $ x - m
-    d = fromIntegral . G.length $ m
-{-# INLINE logPDF #-}
 
 data GaussianHMM = GaussianHMM
     { _startProb :: !(U.Vector Double)
@@ -187,7 +168,7 @@ covWithMean (mx, xs) (my, ys) | n == 1 = 0
     n = fromIntegral $ G.length xs
 
 train :: V.Vector (Vector Double) -> Int -> Int -> GaussianHMM
-train ob k n = run init 0
+train ob k n = error $ show $ forward' init ob  -- run init 0
   where
     run !hmm !i | i >= n = hmm
                 | otherwise = run (baumWelch ob hmm) (i+1)
@@ -217,11 +198,15 @@ kmeansHMM ob k =
 --
 -- Initial probabilities: [0.5000, 0.5000]
 --
+-- viterbi path
 -- ([1, 0, 1, 0, 1, 1, 0, 1, 0, 1], -16.67738270170788)
+--
+-- P(O) = -15.226179570606487
 test = do
    let hmm = GaussianHMM (U.fromList [0.5,0.5]) (M.fromLists [[0.1,0.9],[0.5,0.5]]) (V.fromList [m1,m2])
        m1 = mvn (vector [1]) (matrix 1 [1])
        m2 = mvn (vector [-1]) (matrix 1 [1])
        obs = V.fromList $ map (vector.return) [-1.6835, 0.0635, -2.1688, 0.3043, -0.3188, -0.7835, 1.0398, -1.3558, 1.0882, 0.4050]
    print $ viterbi hmm obs
+   print $ forward' hmm obs
    print $ forward hmm obs

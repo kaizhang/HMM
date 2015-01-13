@@ -3,7 +3,6 @@
 {-# LANGUAGE BangPatterns #-}
 module AI.HMM.Class
     ( HMM(..)
-    , loglikFromScales
     ) where
 
 import Control.Monad.ST (runST)
@@ -16,6 +15,9 @@ import qualified Data.Matrix.Unboxed.Mutable as MM
 import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
+import qualified Data.Vector.Unboxed.Mutable as UM
+
+import AI.Function (logSumExpM)
 
 -- discrete state and discrete time hidden markov model
 class HMM hmm observ | hmm -> observ where
@@ -81,12 +83,53 @@ class HMM hmm observ | hmm -> observ where
 
         mat' <- MM.unsafeFreeze mat
         scales' <- G.unsafeFreeze scales
-        
         return (mat', scales')
       where
         r = nSt h
         c = G.length ob
     {-# INLINE forward #-}
+
+    -- | forward algorithm in log scale
+    -- because in high dimension settings the pdf can be super small, the probability
+    -- must be in log scale to prevent underflow. Moreover, even the probability is
+    -- in log scale, it still can underflow in a long run (a long sequence of obervations).
+    -- Therefore, we need to properly scale the probability at each iteration.
+    forward' :: G.Vector v observ => hmm -> v observ -> (M.Matrix Double, U.Vector Double)
+    forward' h ob = runST $ do
+        mat <- MM.new (r,c)
+        scales <- GM.new c
+
+        -- update first column
+        temp0 <- UM.new r
+        forM_ [0..r-1] $ \i -> do
+            let x = log (π h i) + b' h i (G.head ob)
+            GM.unsafeWrite temp0 i x
+        s0 <- fmap negate . logSumExpM $ temp0
+        GM.unsafeWrite scales 0 s0
+        -- normalize
+        forM_ [0..r-1] $ \i -> GM.unsafeRead temp0 i >>= MM.unsafeWrite mat (i,0) . (+s0)
+
+        -- update the rest of columns
+        forM_ [1..c-1] $ \t -> do
+            temp <- UM.new r
+            forM_ [0..r-1] $ \j -> do
+                sum_α_a <- foldM ( \acc i -> do
+                    α_it' <- MM.unsafeRead mat (i,t-1)
+                    return $! acc + exp (α_it' + log (a h i j)) ) 0 [0..r-1]
+                GM.unsafeWrite temp j $ log sum_α_a + b' h j (ob `G.unsafeIndex` t)
+
+            s <- fmap negate . logSumExpM $ temp
+            GM.unsafeWrite scales t s
+            -- normalize
+            forM_ [0..r-1] $ \i -> GM.unsafeRead temp i >>= MM.unsafeWrite mat (i,t) . (+s)
+        
+        mat' <- MM.unsafeFreeze mat
+        scales' <- G.unsafeFreeze scales
+        return (mat', scales')
+      where
+        r = nSt h
+        c = G.length ob
+    {-# INLINE forward' #-}
 
     backward :: G.Vector v observ => hmm -> v observ -> U.Vector Double -> M.Matrix Double
     backward h ob scales = MM.create $ do
@@ -110,8 +153,37 @@ class HMM hmm observ | hmm -> observ where
         c = G.length ob
     {-# INLINE backward #-}
 
+    -- | backward in log scale
+    backward' :: G.Vector v observ => hmm -> v observ -> U.Vector Double -> M.Matrix Double
+    backward' h ob scales = MM.create $ do
+        mat <- MM.new (r,c)
+        -- fill in last column
+        forM_ [0..r-1] $ \i -> MM.unsafeWrite mat (i,c-1) $ G.last scales
+        
+        forM_ [c-2,c-3..0] $ \t -> do
+            let sc = scales `G.unsafeIndex` t
+            forM_ [0..r-1] $ \i -> do
+                temp <- UM.new r
+                forM_ [0..r-1] $ \j -> do
+                    let b_jo = b' h j $ ob `G.unsafeIndex` (t+1)
+                        a_ij = log $ a h i j
+                    β_jt' <- MM.unsafeRead mat (j,t+1)
+                    UM.unsafeWrite temp j $! b_jo + a_ij + β_jt'
+                x <- logSumExpM temp
+                MM.unsafeWrite mat (i,t) $! x + sc
+        return mat
+      where
+        r = nSt h
+        c = G.length ob
+    {-# INLINE backward' #-}
+
+    -- | log likelihood of obervations
+    loglik :: G.Vector v observ => hmm -> v observ -> Double
+    loglik h = loglikFromScales . snd . forward h
+
     {-# MINIMAL nSt, π, a, b, baumWelch #-}
 
 -- | compute log likelihood from scales of forward probabilities vector
 loglikFromScales :: U.Vector Double -> Double
 loglikFromScales = G.sum . G.map (negate . log)
+{-# INLINE loglikFromScales #-}
