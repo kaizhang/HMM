@@ -54,19 +54,21 @@ instance HMM GaussianHMM (Vector Double) where
 
     baumWelch ob h@(GaussianHMM _ trans _) = GaussianHMM ini' trans' em'
       where
-        ini' = G.map (/(G.head scales)) $ G.zipWith (*) (fw `M.takeColumn` 0) (bw `M.takeColumn` 0)
+        ini' = G.zipWith (\x y -> exp $ x + y - G.head scales) (fw `M.takeColumn` 0) (bw `M.takeColumn` 0)
         trans' = MM.create $ do
-            mat <- MM.replicate (n,n) 0
-            forM_ [1 .. G.length ob - 1] $ \t -> do
-                let o = ob `G.unsafeIndex` t
-                forM_ [0..n-1] $ \i -> do
-                    let α_it' = fw `M.unsafeIndex` (i,t-1)
-                    forM_ [0..n-1] $ \j -> do
-                        let a_ij = trans `M.unsafeIndex` (i,j)
-                            b_jo = b h j o
+            mat <- MM.new (n,n)
+            forM_ [0..n-1] $ \i ->
+                forM_ [0..n-1] $ \j -> do
+                    let a_ij = trans `M.unsafeIndex` (i,j)
+                    temp <- UM.new $ G.length ob
+                    forM_ [1 .. G.length ob - 1] $ \t -> do
+                        let o = ob `G.unsafeIndex` t
+                            b_jo = b' h j o
+                            α_it' = fw `M.unsafeIndex` (i,t-1)
                             β_jt = bw `M.unsafeIndex` (j,t)
-                        MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) .
-                            (+) (α_it' * a_ij * b_jo * β_jt)
+                        GM.unsafeWrite temp t $ b_jo + α_it' + β_jt
+                    x <- logSumExpM temp
+                    MM.unsafeWrite mat (i,j) $ log a_ij + x
             normalizeByRow n n mat
             return mat
 
@@ -74,12 +76,12 @@ instance HMM GaussianHMM (Vector Double) where
                                        f t = let α_it = fw `M.unsafeIndex` (i,t)
                                                  β_it = bw `M.unsafeIndex` (i,t)
                                                  sc = scales `G.unsafeIndex` t
-                                              in α_it * β_it / sc
+                                              in exp $ α_it + β_it - sc
                                        (m, cov) = weightedMeanCovMatrix ws ob'
                                    in mvn m (convert $ fst $ glasso cov 0.01)
 
-        (fw, scales) = forward h ob
-        bw = backward h ob scales
+        (fw, scales) = forward' h ob
+        bw = backward' h ob scales
         n = nSt h
         ob' = M.fromRows $ G.toList ob
 
@@ -87,12 +89,11 @@ convert mat = reshape c $ M.flatten mat
   where
     c = M.cols mat
 
+-- normalize log probabilities
 normalizeByRow :: Int -> Int -> MM.MMatrix s Double -> ST s ()
 normalizeByRow r c mat = forM_ [0..r-1] $ \i -> do
-    temp <- newSTRef 0
-    forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= modifySTRef' temp . (+) 
-    s <- readSTRef temp
-    forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (/s)
+    sc <- logSumExpM $ MM.takeRow mat i
+    forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (exp . subtract sc)
 
 covWeighted :: U.Vector Double -> (Vector Double, Double) -> (Vector Double, Double) -> Double
 covWeighted ws (xs, mx) (ys, my) = uncurry (/) . G.foldl f (0,0) $ U.enumFromN 0 $ G.length ws
@@ -168,7 +169,7 @@ covWithMean (mx, xs) (my, ys) | n == 1 = 0
     n = fromIntegral $ G.length xs
 
 train :: V.Vector (Vector Double) -> Int -> Int -> GaussianHMM
-train ob k n = error $ show $ forward' init ob  -- run init 0
+train ob k n = run init 0
   where
     run !hmm !i | i >= n = hmm
                 | otherwise = run (baumWelch ob hmm) (i+1)

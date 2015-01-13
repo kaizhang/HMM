@@ -31,7 +31,7 @@ library
     , hmatrix
     , glasso
     , unordered-containers >=0.2 && <0.3
-    , matrices >=0.2 && <0.3
+    , matrices >=0.3
     , mwc-random
     , mtl
     , primitive
