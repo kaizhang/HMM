@@ -3,6 +3,7 @@
 {-# LANGUAGE BangPatterns #-}
 module AI.HMM.Class
     ( HMM(..)
+    , loglikFromScales
     ) where
 
 import Control.Monad.ST (runST)

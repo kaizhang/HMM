@@ -77,8 +77,8 @@ instance HMM GaussianHMM (Vector Double) where
                                                  β_it = bw `M.unsafeIndex` (i,t)
                                                  sc = scales `G.unsafeIndex` t
                                               in exp $ α_it + β_it - sc
-                                       (m, cov) = weightedMeanCovMatrix ws ob'
-                                   in mvn m (convert $ fst $ glasso cov 0.01)
+                                       (m, cov) = traceShow ws $ weightedMeanCovMatrix ws ob'
+                                   in mvn m (convert cov) -- $ fst $ glasso cov 0.01)
 
         (fw, scales) = forward' h ob
         bw = backward' h ob scales
@@ -94,30 +94,6 @@ normalizeByRow :: Int -> Int -> MM.MMatrix s Double -> ST s ()
 normalizeByRow r c mat = forM_ [0..r-1] $ \i -> do
     sc <- logSumExpM $ MM.takeRow mat i
     forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (exp . subtract sc)
-
-covWeighted :: U.Vector Double -> (Vector Double, Double) -> (Vector Double, Double) -> Double
-covWeighted ws (xs, mx) (ys, my) = uncurry (/) . G.foldl f (0,0) $ U.enumFromN 0 $ G.length ws
-  where
-    f (!a,!b) i = let w = ws G.! i
-                      x = xs G.! i
-                      y = ys G.! i
-                  in (a + w * (x - mx) * (y - my), b+w)
-{-# INLINE covWeighted #-}
-
---weightedMeanCovMatrix :: G.Vector v Double => U.Vector Double -> M.Matrix Double -> (Vector Double, Matrix Double)
-weightedMeanCovMatrix ws xs = (means, covMat)
-  where
-    means = G.generate n $ \i -> meanWeighted . G.zip ws . G.convert $ (xs `M.takeColumn` i)
-    covMat = MM.create $ do
-        mat <- MM.new (n,n)
-        forM_ [0..n-1] $ \i ->
-            forM_ [i..n-1] $ \j -> do
-                let cov = covWeighted ws (xs `M.takeColumn` i, means G.! i) (xs `M.takeColumn` j, means G.! j) 
-                MM.unsafeWrite mat (i,j) cov
-                MM.unsafeWrite mat (j,i) cov
-        return mat
-
-    n = M.cols xs
 
 -- | construct inital HMM model by kmeans clustering
 kMeansInitial :: (PrimMonad m, G.Vector v (Vector Double))
@@ -174,7 +150,7 @@ train ob k n = run init 0
     run !hmm !i | i >= n = hmm
                 | otherwise = run (baumWelch ob hmm) (i+1)
     init = runST $ do
-        g <- initialize $ U.fromList [2,2,1,234,95,293,29992,232]
+        g <- create
         kMeansInitial g ob k
 
 test1 = do
@@ -206,8 +182,16 @@ kmeansHMM ob k =
 test = do
    let hmm = GaussianHMM (U.fromList [0.5,0.5]) (M.fromLists [[0.1,0.9],[0.5,0.5]]) (V.fromList [m1,m2])
        m1 = mvn (vector [1]) (matrix 1 [1])
-       m2 = mvn (vector [-1]) (matrix 1 [1])
+       m2 = mvn (vector [1]) (matrix 1 [1])
        obs = V.fromList $ map (vector.return) [-1.6835, 0.0635, -2.1688, 0.3043, -0.3188, -0.7835, 1.0398, -1.3558, 1.0882, 0.4050]
-   print $ viterbi hmm obs
-   print $ forward' hmm obs
-   print $ forward hmm obs
+--   print $ viterbi hmm obs
+--   print $ forward' hmm obs
+       (f, sc) = forward hmm obs
+       b = backward hmm obs sc
+   loop obs hmm 0
+ where
+   loop o h i | i > 30 = 1
+              | otherwise = let h' = baumWelch o h
+                                (_, sc) = forward h o
+                            in traceShow (loglikFromScales sc) $ loop o h' (i+1)
+
