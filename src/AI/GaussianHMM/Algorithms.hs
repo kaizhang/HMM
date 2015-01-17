@@ -56,8 +56,8 @@ baumWelch ob h = (GaussianHMM ini' trans' em', scales)
                                              β_it = bw `M.unsafeIndex` (i,t)
                                              sc = scales `G.unsafeIndex` t
                                           in exp $ α_it + β_it - sc
-                                   (mean, cov) = traceShow (G.sum ws) $ weightedMeanCovMatrix ws ob
-                               in mvn mean (convert $ fst $ glasso cov 0.1)
+                                   (mean, cov) = weightedMeanCovMatrix ws ob
+                               in mvn mean (convert cov) -- $ fst $ glasso cov 0.1)
 
     (fw, scales) = forward h ob
     bw = backward h ob scales
@@ -94,10 +94,18 @@ forward h ob = runST $ do
     forM_ [1..c-1] $ \t -> do
         temp <- UM.new r
         forM_ [0..r-1] $ \j -> do
-            sum_α_a <- foldM ( \acc i -> do
-                α_it' <- MM.unsafeRead mat (i,t-1)
-                return $! acc + exp (α_it' + a h (i,j)) ) 0 [0..r-1]
-            GM.unsafeWrite temp j $ log sum_α_a + b h j (ob `M.takeRow` t)
+            temp' <- UM.new r
+            forM_ [0..r-1] $ \i -> do
+                α_it' <- MM.read mat (i,t-1)
+                GM.unsafeWrite temp' i $ α_it' + a h (i,j)
+                
+            sum_α_a <- logSumExpM temp'
+
+            GM.unsafeWrite temp j $ sum_α_a + b h j (ob `M.takeRow` t)
+            if isNaN (sum_α_a + b h j (ob `M.takeRow` t))
+               then do
+                   error $ show (sum_α_a, b h j (ob `M.takeRow` t))
+               else return ()
 
         s <- fmap negate . logSumExpM $ temp
         GM.unsafeWrite scales t s
@@ -203,3 +211,24 @@ covWithMean (mx, xs) (my, ys) | n == 1 = 0
 convert mat = reshape c $ M.flatten mat
   where
     c = M.cols mat
+
+hmmExample :: (GaussianHMM, Observation)
+hmmExample = (hmm, obs)
+  where
+    hmm = GaussianHMM (U.fromList $ map log [0.5,0.5])
+                      (M.fromLists $ ((map.map) log) [[0.1,0.9],[0.5,0.5]])
+                      (V.fromList [m1,m2])
+    m1 = mvn (vector [1]) (matrix 1 [1])
+    m2 = mvn (vector [-1]) (matrix 1 [1])
+    obs = M.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
+                                   , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
+
+
+test = do
+    let (hmm, obs) = hmmExample
+    loop obs hmm 0
+  where
+    loop o h i | i > 20 = 1
+               | otherwise = let h' = fst $ baumWelch o h
+                                 (f, sc) = forward h o
+                             in traceShow (G.sum sc) $ loop o h' (i+1)

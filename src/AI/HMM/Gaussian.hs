@@ -77,7 +77,7 @@ instance HMM GaussianHMM (Vector Double) where
                                                  β_it = bw `M.unsafeIndex` (i,t)
                                                  sc = scales `G.unsafeIndex` t
                                               in exp $ α_it + β_it - sc
-                                       (m, cov) = traceShow ws $ weightedMeanCovMatrix ws ob'
+                                       (m, cov) = weightedMeanCovMatrix ws ob'
                                    in mvn m (convert cov) -- $ fst $ glasso cov 0.01)
 
         (fw, scales) = forward' h ob
@@ -153,9 +153,6 @@ train ob k n = run init 0
         g <- create
         kMeansInitial g ob k
 
-test1 = do
-    print $ train [[0.2,3.1,2],[2,1,3],[0.5,1.5,10],[0.6,2,0.2],[2,3,2],[2,3,6],[2,3,5]] 2 3
-
 {-
 kmeansHMM :: V.Vector (Vector Double) -> Int -> GaussianHMM
 kmeansHMM ob k = 
@@ -182,7 +179,7 @@ kmeansHMM ob k =
 test = do
    let hmm = GaussianHMM (U.fromList [0.5,0.5]) (M.fromLists [[0.1,0.9],[0.5,0.5]]) (V.fromList [m1,m2])
        m1 = mvn (vector [1]) (matrix 1 [1])
-       m2 = mvn (vector [1]) (matrix 1 [1])
+       m2 = mvn (vector [-1]) (matrix 1 [1])
        obs = V.fromList $ map (vector.return) [-1.6835, 0.0635, -2.1688, 0.3043, -0.3188, -0.7835, 1.0398, -1.3558, 1.0882, 0.4050]
 --   print $ viterbi hmm obs
 --   print $ forward' hmm obs
@@ -190,7 +187,7 @@ test = do
        b = backward hmm obs sc
    loop obs hmm 0
  where
-   loop o h i | i > 30 = 1
+   loop o h i | i > 400 = 1
               | otherwise = let h' = baumWelch o h
                                 (_, sc) = forward h o
                             in traceShow (loglikFromScales sc) $ loop o h' (i+1)
