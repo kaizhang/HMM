@@ -4,36 +4,13 @@ module AI.Function where
 
 import Control.Monad (forM_)
 import Control.Monad.Primitive
-import Numeric.LinearAlgebra.HMatrix (Matrix, Vector, (<>), invlndet, (!), tr, asRow)
 import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Matrix.Generic as M
 import qualified Data.Matrix.Generic.Mutable as MM
+import Numeric.LinearAlgebra.HMatrix (Vector, (<>), invlndet, (!), tr, asRow)
 import Statistics.Sample (meanWeighted)
-
--- | multivariate normal distribution
-data MVN = MVN
-    { _mean :: !(Vector Double)
-    , _cov :: !(Matrix Double)
-    , _invcov :: !(Matrix Double)
-    , _logdet :: !Double  -- ^ log determinant of covariance matrix
-    } deriving (Show)
-
-mvn :: Vector Double -> Matrix Double -> MVN
-mvn m cov = MVN m cov invcov logdet
-  where
-    (invcov, (logdet, _)) = invlndet cov
-
--- | log probability of MVN
-logPDF :: MVN -> Vector Double -> Double
-logPDF (MVN m _ invcov logdet) x = -0.5 * ( d * log (2*pi) + logdet
-                                        + (x' <> invcov <> tr x') ! 0 ! 0
-                                        )
-  where
-    x' = asRow $ x - m
-    d = fromIntegral . G.length $ m
-{-# INLINE logPDF #-}
 
 logSumExp :: G.Vector v Double => v Double -> Double
 logSumExp xs = m + log (G.foldl' (\acc x -> acc + exp (x-m)) 0 xs)
@@ -71,7 +48,7 @@ covWeighted ws (xs, mx) (ys, my) = g . G.foldl f (0,0) $ U.enumFromN 0 $ G.lengt
                       x = xs G.! i
                       y = ys G.! i
                   in (a + w * (x - mx) * (y - my), b+w)
-    g (a,b) | b == 0 = 0
+    g (a,b) | b == 0 = 1e-6  -- psedocount
             | otherwise = a / b
 {-# INLINE covWeighted #-}
 

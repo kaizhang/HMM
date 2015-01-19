@@ -26,6 +26,7 @@ import System.Random.MWC
 
 import AI.Clustering.KMeans
 import AI.Function
+import AI.MVN
 import AI.HMM.Class
 
 import Debug.Trace

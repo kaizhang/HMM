@@ -1,9 +1,15 @@
 {-# LANGUAGE BangPatterns #-}
 
-module AI.GaussianHMM.Algorithms where
+module AI.GaussianHMM.Algorithms
+   ( baumWelch
+   , forward
+   , backward
+   , viterbi
+   , kMeansInitial
+   ) where
 
 import Control.Monad.Primitive 
-import Control.Monad (forM_, foldM)
+import Control.Monad (forM_)
 import Control.Monad.ST (runST)
 import Numeric.LinearAlgebra.HMatrix (Matrix, Vector, (<>), invlndet, (!), tr, asRow, vector, matrix, reshape)
 import qualified Data.Vector as V
@@ -18,12 +24,13 @@ import qualified Data.Matrix.Generic.Mutable as MM
 import qualified Data.Matrix.Storable as S
 import Algorithms.GLasso (glasso)
 import Statistics.Sample (mean)
-import Data.List (groupBy, sortBy)
+import Data.List (groupBy, sortBy, maximumBy, foldl')
 import Data.Ord
 import Data.Function
 import System.Random.MWC
 
 import AI.Function
+import AI.MVN
 import AI.GaussianHMM.Types
 import AI.Clustering.KMeans
 
@@ -32,7 +39,7 @@ import Debug.Trace
 baumWelch :: Observation -> GaussianHMM -> (GaussianHMM, U.Vector Double)
 baumWelch ob h = (GaussianHMM ini' trans' em', scales)
   where
-    ini' = G.zipWith (\x y -> x + y - G.head scales) (fw `M.takeColumn` 0) (bw `M.takeColumn` 0)
+    ini' = γ `M.takeColumn` 0
 
     trans' = MM.create $ do
         mat <- MM.new (n,n)
@@ -51,16 +58,13 @@ baumWelch ob h = (GaussianHMM ini' trans' em', scales)
         normalizeRow mat
         return mat
 
-    em' = G.generate n $ \i -> let ws = G.map f $ G.enumFromN 0 m
-                                   f t = let α_it = fw `M.unsafeIndex` (i,t)
-                                             β_it = bw `M.unsafeIndex` (i,t)
-                                             sc = scales `G.unsafeIndex` t
-                                          in exp $ α_it + β_it - sc
+    em' = G.generate n $ \i -> let ws = G.map exp $ γ `M.takeRow` i
                                    (mean, cov) = weightedMeanCovMatrix ws ob
-                               in mvn mean (convert cov) -- $ fst $ glasso cov 0.1)
+                               in mvn mean (convert $ fst $ glasso cov 0.1)
 
     (fw, scales) = forward h ob
     bw = backward h ob scales
+    γ = MU.generate (n,m) $ \(s,t) -> fw `M.unsafeIndex` (s,t) + bw `M.unsafeIndex` (s,t) - scales `G.unsafeIndex` t
     n = nSt h
     m = M.rows ob
 
@@ -102,10 +106,6 @@ forward h ob = runST $ do
             sum_α_a <- logSumExpM temp'
 
             GM.unsafeWrite temp j $ sum_α_a + b h j (ob `M.takeRow` t)
-            if isNaN (sum_α_a + b h j (ob `M.takeRow` t))
-               then do
-                   error $ show (sum_α_a, b h j (ob `M.takeRow` t))
-               else return ()
 
         s <- fmap negate . logSumExpM $ temp
         GM.unsafeWrite scales t s
@@ -143,6 +143,20 @@ backward h ob scales = MM.create $ do
     r = nSt h
     c = M.rows ob
 {-# INLINE backward #-}
+
+viterbi :: GaussianHMM -> Observation -> ([Int], Double)
+viterbi h ob = foldl track ([],undefined) . init . foldl' f [] . M.toRows $ ob
+  where
+    f [] o = [U.generate n $ \i -> (π h i + b h i o, -1)]
+    f acc@(l_t:_) o =
+        let score i j = fst (G.unsafeIndex l_t i) + a h (i,j)
+            vec = U.generate n $ \j -> let (i, x) = maximumBy (comparing snd) . map (\i' -> (i', score i' j)) $ [0..n-1]
+                                       in (x + b h j o, i)
+        in vec : acc
+    track ([], _) v = let ((p, prev), i) = G.maximumBy (comparing (fst.fst)) $ G.zip v $ G.enumFromN 0 n
+                      in ([prev, i], p)
+    track (path@(i:_), p) v = (snd (G.unsafeIndex v i) : path, p)
+    n = nSt h
 
 {-
 randomInitial :: PrimMonad m
@@ -226,9 +240,10 @@ hmmExample = (hmm, obs)
 
 test = do
     let (hmm, obs) = hmmExample
-    loop obs hmm 0
+    print $ viterbi hmm obs
+--    loop obs hmm 0
   where
-    loop o h i | i > 20 = 1
+    loop o h i | i > 100 = print h
                | otherwise = let h' = fst $ baumWelch o h
                                  (f, sc) = forward h o
                              in traceShow (G.sum sc) $ loop o h' (i+1)
