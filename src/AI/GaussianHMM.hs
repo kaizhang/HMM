@@ -46,7 +46,7 @@ fitHMM ob k n = loop (initHMM,sc) 0
    loop (!hmm,s) !i | i > n = hmm
                     | otherwise =
                          let (hmm', sc') = baumWelch ob hmm
-                         in traceShow (covDiff hmm' hmm) $ loop (hmm',sc') (i+1)
+                         in traceShow (negate $ G.sum s, covDiff hmm' hmm) $ loop (hmm',sc') (i+1)
    initHMM = runST $ do
        g <- create
        kMeansInitial g ob k

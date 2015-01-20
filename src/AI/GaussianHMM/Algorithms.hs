@@ -60,13 +60,19 @@ baumWelch ob h = (GaussianHMM ini' trans' em', scales)
 
     em' = G.generate n $ \i -> let ws = G.map exp $ γ `M.takeRow` i
                                    (mean, cov) = weightedMeanCovMatrix ws ob
-                               in mvn mean (convert $ fst $ glasso cov 0.1)
+                               in mvnEstimate mean cov
 
     (fw, scales) = forward h ob
     bw = backward h ob scales
     γ = MU.generate (n,m) $ \(s,t) -> fw `M.unsafeIndex` (s,t) + bw `M.unsafeIndex` (s,t) - scales `G.unsafeIndex` t
     n = nSt h
     m = M.rows ob
+
+mvnEstimate m cov | logdet == -1/0 = mvn m $ convert $ fst $ glasso cov 0.005
+                  | otherwise = MVN m (convert cov) invcov logdet
+  where
+    (invcov, (logdet, _)) = invlndet $ convert cov
+
 
 {-
 -- | the E step in EM algorithm
