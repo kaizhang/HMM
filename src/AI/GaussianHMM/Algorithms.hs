@@ -37,7 +37,7 @@ import AI.Clustering.KMeans
 import Debug.Trace
 
 baumWelch :: Observation -> GaussianHMM -> (GaussianHMM, U.Vector Double)
-baumWelch ob h = traceShow em' $ (GaussianHMM ini' trans' em', scales)
+baumWelch ob h = (GaussianHMM ini' trans' em', scales)
   where
     ini' = γ `M.takeColumn` 0
 
@@ -46,13 +46,13 @@ baumWelch ob h = traceShow em' $ (GaussianHMM ini' trans' em', scales)
         forM_ [0..n-1] $ \i ->
             forM_ [0..n-1] $ \j -> do
                 let a_ij = a h (i,j)
-                temp <- UM.new m
+                temp <- UM.new (m-1)
                 forM_ [1 .. m - 1] $ \t -> do
                     let o = ob `M.takeRow` t
                         b_jo = b h j o
                         α_it' = fw `M.unsafeIndex` (i,t-1)
                         β_jt = bw `M.unsafeIndex` (j,t)
-                    GM.unsafeWrite temp t $ b_jo + α_it' + β_jt
+                    GM.unsafeWrite temp (t-1) $ b_jo + α_it' + β_jt
                 x <- logSumExpM temp
                 MM.unsafeWrite mat (i,j) $ a_ij + x
         normalizeRow mat
@@ -60,7 +60,7 @@ baumWelch ob h = traceShow em' $ (GaussianHMM ini' trans' em', scales)
 
     em' = G.generate n $ \i -> let ws = G.map exp $ γ `M.takeRow` i
                                    (mean, cov) = weightedMeanCovMatrix ws ob
-                               in diagCov mean cov
+                               in glassoCov mean cov
 
     (fw, scales) = forward h ob
     bw = backward h ob scales
@@ -77,7 +77,7 @@ baumWelch ob h = traceShow em' $ (GaussianHMM ini' trans' em', scales)
 
 diagCov m cov = mvn m $ convert $ M.diag (M.takeDiag cov :: V.Vector Double)
 
-mvnEstimate m cov = mvn m $ reshape (M.rows cov) $ fst $ glasso (M.rows cov) (M.flatten cov) 0.01
+glassoCov m cov = mvn m $ reshape (M.rows cov) $ fst $ glasso (M.rows cov) (M.flatten cov) 0.01
 
 fullCov m cov = MVN m (convert cov) invcov logdet
   where
@@ -243,7 +243,7 @@ convert mat = reshape c $ M.flatten mat
     c = M.cols mat
 
 hmmExample :: (GaussianHMM, Observation)
-hmmExample = (hmm, obs2)
+hmmExample = (hmm, obs)
   where
     hmm = GaussianHMM (U.fromList $ map log [0.5,0.5])
                       (M.fromLists $ ((map.map) log) [[0.1,0.9],[0.5,0.5]])
@@ -254,6 +254,7 @@ hmmExample = (hmm, obs2)
     obs = M.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
                                    , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
 
+    obs2 :: Observation
     obs2 = M.fromLists $ map return [ -0.2370699812741054, -0.7650421248531205, -1.2449364749699783
                                     , -0.4940448810044036, -1.0751810551549668, -0.573496578580446
                                     , -0.7244465394993085, -0.44320733687218794, -0.5137119768758072]
