@@ -46,11 +46,16 @@ fitHMM ob k n = loop (initHMM,sc) 0
    loop (!hmm,s) !i | i > n = hmm
                     | otherwise =
                          let (hmm', sc') = baumWelch ob hmm
-                         in traceShow (negate $ G.sum s, covDiff hmm' hmm) $ loop (hmm',sc') (i+1)
+                         in traceShow ((negate . G.sum) s - 0 * penalty hmm) $ loop (hmm',sc') (i+1)
    initHMM = runST $ do
        g <- create
        kMeansInitial g ob k
    (_, sc) = forward initHMM ob
+
+penalty :: GaussianHMM -> Double
+penalty (GaussianHMM _ _ x) = G.foldl' f 0 x 
+  where
+    f acc (MVN _ _ icov _)  = norm_1 icov + acc
 
 covDiff :: GaussianHMM -> GaussianHMM -> Double
 covDiff (GaussianHMM _ _ x) (GaussianHMM _ _ y) = G.maximum $ G.zipWith f x y

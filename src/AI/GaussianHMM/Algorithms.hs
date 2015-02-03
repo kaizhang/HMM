@@ -37,7 +37,7 @@ import AI.Clustering.KMeans
 import Debug.Trace
 
 baumWelch :: Observation -> GaussianHMM -> (GaussianHMM, U.Vector Double)
-baumWelch ob h = (GaussianHMM ini' trans' em', scales)
+baumWelch ob h = traceShow em' $ (GaussianHMM ini' trans' em', scales)
   where
     ini' = γ `M.takeColumn` 0
 
@@ -60,16 +60,26 @@ baumWelch ob h = (GaussianHMM ini' trans' em', scales)
 
     em' = G.generate n $ \i -> let ws = G.map exp $ γ `M.takeRow` i
                                    (mean, cov) = weightedMeanCovMatrix ws ob
-                               in mvnEstimate mean cov
+                               in diagCov mean cov
 
     (fw, scales) = forward h ob
     bw = backward h ob scales
+    γ :: MU.Matrix Double
     γ = MU.generate (n,m) $ \(s,t) -> fw `M.unsafeIndex` (s,t) + bw `M.unsafeIndex` (s,t) - scales `G.unsafeIndex` t
     n = nSt h
     m = M.rows ob
+    f :: MU.Matrix Double -> MU.Matrix Double
+    f x = runST $ do
+        x' <- MM.unsafeThaw $ MU.tr $ MU.map (\i -> if i < -1e200 then -1e200 else i) x
+        normalizeRow x'
+        x'' <- MM.unsafeFreeze x'
+        return $ MU.tr x''
 
-mvnEstimate m cov | logdet == -1/0 = mvn m $ convert $ fst $ glasso cov 0.005
-                  | otherwise = MVN m (convert cov) invcov logdet
+diagCov m cov = mvn m $ convert $ M.diag (M.takeDiag cov :: V.Vector Double)
+
+mvnEstimate m cov = mvn m $ reshape (M.rows cov) $ fst $ glasso (M.rows cov) (M.flatten cov) 0.01
+
+fullCov m cov = MVN m (convert cov) invcov logdet
   where
     (invcov, (logdet, _)) = invlndet $ convert cov
 
@@ -207,7 +217,7 @@ kMeansInitial g ob k = do
         sc <- G.foldM' (\acc j -> fmap (+acc) $ MM.unsafeRead mat (i,j)) 0 $ U.enumFromN 0 x
         forM_ [0..x-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (/sc)
 
-meanCov dat = (meanVec, reshape p $ M.flatten $ fst $ glasso covs 0.01)
+meanCov dat = (meanVec, reshape p $ fst $ glasso p (M.flatten covs) 0.01)
   where
     covs = MM.create $ do
         mat <- MM.new (p,p)
@@ -222,7 +232,7 @@ meanCov dat = (meanVec, reshape p $ M.flatten $ fst $ glasso covs 0.01)
     p = G.length meanVec
 
 covWithMean :: (Double, Vector Double) -> (Double, Vector Double) -> Double
-covWithMean (mx, xs) (my, ys) | n == 1 = 0
+covWithMean (mx, xs) (my, ys) | n == 1 = 1e-200
                               | otherwise = G.sum (G.zipWith f xs ys) / (n - 1)
   where
     f x y = (x - mx) * (y - my)
@@ -233,21 +243,24 @@ convert mat = reshape c $ M.flatten mat
     c = M.cols mat
 
 hmmExample :: (GaussianHMM, Observation)
-hmmExample = (hmm, obs)
+hmmExample = (hmm, obs2)
   where
     hmm = GaussianHMM (U.fromList $ map log [0.5,0.5])
                       (M.fromLists $ ((map.map) log) [[0.1,0.9],[0.5,0.5]])
                       (V.fromList [m1,m2])
     m1 = mvn (vector [1]) (matrix 1 [1])
     m2 = mvn (vector [-1]) (matrix 1 [1])
+    obs :: Observation
     obs = M.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
                                    , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
 
+    obs2 = M.fromLists $ map return [ -0.2370699812741054, -0.7650421248531205, -1.2449364749699783
+                                    , -0.4940448810044036, -1.0751810551549668, -0.573496578580446
+                                    , -0.7244465394993085, -0.44320733687218794, -0.5137119768758072]
 
 test = do
     let (hmm, obs) = hmmExample
-    print $ viterbi hmm obs
---    loop obs hmm 0
+    loop obs hmm 0
   where
     loop o h i | i > 100 = print h
                | otherwise = let h' = fst $ baumWelch o h

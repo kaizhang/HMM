@@ -124,7 +124,7 @@ kMeansInitial g ob k = do
   where
     n = G.length ob
 
-meanCov dat = (meanVec, reshape p $ M.flatten $ fst $ glasso covs 0.01)
+meanCov dat = (meanVec, reshape p $ M.flatten covs)
   where
     covs = MM.create $ do
         mat <- MM.new (p,p)

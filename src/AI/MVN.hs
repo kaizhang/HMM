@@ -1,8 +1,11 @@
 module AI.MVN where
 
 import Data.Binary
+import qualified Data.Vector as V
 import qualified Data.Vector.Generic as G
 import Numeric.LinearAlgebra.HMatrix (Matrix, Vector, (<>), invlndet, (!), tr, asRow, toLists, fromLists)
+
+import AI.Function
 
 -- | multivariate normal distribution
 data MVN = MVN
@@ -11,6 +14,9 @@ data MVN = MVN
     , _invcov :: !(Matrix Double)
     , _logdet :: !Double  -- ^ log determinant of covariance matrix
     } deriving (Show)
+
+-- | mixture of multivariate normal variables, weight is in log form
+newtype MixMVN = MixMVN (V.Vector (Double, MVN))
 
 instance Binary MVN where
     put (MVN a b c d) = do
@@ -39,3 +45,7 @@ logPDF (MVN m _ invcov logdet) x = -0.5 * ( d * log (2*pi) + logdet
     x' = asRow $ x - m
     d = fromIntegral . G.length $ m
 {-# INLINE logPDF #-}
+
+logPDFMix :: MixMVN -> Vector Double -> Double
+logPDFMix (MixMVN v) xs = logSumExp . G.map (\(logw, m) -> logw + logPDF m xs) $ v
+{-# INLINE logPDFMix #-}
