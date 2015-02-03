@@ -12,6 +12,8 @@ import qualified Data.Matrix.Generic.Mutable as MM
 import Numeric.LinearAlgebra.HMatrix (Vector, (<>), invlndet, (!), tr, asRow)
 import Statistics.Sample (meanWeighted)
 
+import Debug.Trace
+
 logSumExp :: G.Vector v Double => v Double -> Double
 logSumExp xs = m + log (G.foldl' (\acc x -> acc + exp (x-m)) 0 xs)
   where
@@ -48,7 +50,7 @@ covWeighted ws (xs, mx) (ys, my) = g . G.foldl f (0,0) $ U.enumFromN 0 $ G.lengt
                       x = xs G.! i
                       y = ys G.! i
                   in (a + w * (x - mx) * (y - my), b+w)
-    g (a,b) | a == 0 || b == 0 = 1e-200 -- pseudocount
+    g (a,b) | a == 0 || b == 0 = trace "zero covariance" $ 1e-200 -- pseudocount
             | otherwise = a / b
 {-# INLINE covWeighted #-}
 

@@ -55,21 +55,20 @@ instance HMM GaussianHMM (Vector Double) where
 
     baumWelch ob h@(GaussianHMM _ trans _) = GaussianHMM ini' trans' em'
       where
-        ini' = G.zipWith (\x y -> exp $ x + y - G.head scales) (fw `M.takeColumn` 0) (bw `M.takeColumn` 0)
+        ini' = G.zipWith (\x y -> x * y / G.head scales) (fw `M.takeColumn` 0) (bw `M.takeColumn` 0)
         trans' = MM.create $ do
-            mat <- MM.new (n,n)
-            forM_ [0..n-1] $ \i ->
-                forM_ [0..n-1] $ \j -> do
-                    let a_ij = trans `M.unsafeIndex` (i,j)
-                    temp <- UM.new $ G.length ob
-                    forM_ [1 .. G.length ob - 1] $ \t -> do
-                        let o = ob `G.unsafeIndex` t
-                            b_jo = b' h j o
-                            α_it' = fw `M.unsafeIndex` (i,t-1)
+            mat <- MM.replicate (n,n) 0
+            forM_ [1 .. G.length ob - 1] $ \t -> do
+                let o = ob `G.unsafeIndex` t
+                forM_ [0..n-1] $ \i -> do
+                    let α_it' = fw `M.unsafeIndex` (i,t-1)
+                    forM_ [0..n-1] $ \j -> do
+                        let a_ij = trans `M.unsafeIndex` (i,j)
+                            b_jo = b h j o
                             β_jt = bw `M.unsafeIndex` (j,t)
-                        GM.unsafeWrite temp t $ b_jo + α_it' + β_jt
-                    x <- logSumExpM temp
-                    MM.unsafeWrite mat (i,j) $ log a_ij + x
+                        MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) .
+                            (+) (α_it' * a_ij * b_jo * β_jt)
+
             normalizeByRow n n mat
             return mat
 
@@ -77,12 +76,12 @@ instance HMM GaussianHMM (Vector Double) where
                                        f t = let α_it = fw `M.unsafeIndex` (i,t)
                                                  β_it = bw `M.unsafeIndex` (i,t)
                                                  sc = scales `G.unsafeIndex` t
-                                              in exp $ α_it + β_it - sc
+                                              in α_it * β_it / sc
                                        (m, cov) = weightedMeanCovMatrix ws ob'
                                    in mvn m (convert cov) -- $ fst $ glasso cov 0.01)
 
-        (fw, scales) = forward' h ob
-        bw = backward' h ob scales
+        (fw, scales) = forward h ob
+        bw = backward h ob scales
         n = nSt h
         ob' = M.fromRows $ G.toList ob
 
@@ -93,8 +92,8 @@ convert mat = reshape c $ M.flatten mat
 -- normalize log probabilities
 normalizeByRow :: Int -> Int -> MM.MMatrix s Double -> ST s ()
 normalizeByRow r c mat = forM_ [0..r-1] $ \i -> do
-    sc <- logSumExpM $ MM.takeRow mat i
-    forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (exp . subtract sc)
+    v <- U.freeze $ MM.takeRow mat i
+    forM_ [0..c-1] $ \j -> MM.unsafeRead mat (i,j) >>= MM.unsafeWrite mat (i,j) . (/ G.sum v)
 
 -- | construct inital HMM model by kmeans clustering
 kMeansInitial :: (PrimMonad m, G.Vector v (Vector Double))
@@ -139,17 +138,17 @@ meanCov dat = (meanVec, reshape p $ M.flatten covs)
     p = G.length meanVec
 
 covWithMean :: (Double, Vector Double) -> (Double, Vector Double) -> Double
-covWithMean (mx, xs) (my, ys) | n == 1 = 0
+covWithMean (mx, xs) (my, ys) | n == 1 = 0.0001
                               | otherwise = G.sum (G.zipWith f xs ys) / (n - 1)
   where
     f x y = (x - mx) * (y - my)
     n = fromIntegral $ G.length xs
 
-train :: V.Vector (Vector Double) -> Int -> Int -> GaussianHMM
-train ob k n = run init 0
+fitHMM :: V.Vector (Vector Double) -> Int -> Int -> GaussianHMM
+fitHMM ob k n = run init 0
   where
     run !hmm !i | i >= n = hmm
-                | otherwise = run (baumWelch ob hmm) (i+1)
+                | otherwise = traceShow (loglikFromScales $ snd $ forward hmm ob) $ run (baumWelch ob hmm) (i+1)
     init = runST $ do
         g <- create
         kMeansInitial g ob k
@@ -188,7 +187,7 @@ test = do
        b = backward hmm obs sc
    loop obs hmm 0
  where
-   loop o h i | i > 400 = 1
+   loop o h i | i > 50 = 1
               | otherwise = let h' = baumWelch o h
                                 (_, sc) = forward h o
                             in traceShow (loglikFromScales sc) $ loop o h' (i+1)
