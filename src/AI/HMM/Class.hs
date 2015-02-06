@@ -1,190 +1,133 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE BangPatterns #-}
-module AI.HMM.Class
-    ( HMM(..)
-    , loglikFromScales
-    ) where
 
-import Control.Monad.ST (runST)
+module AI.HMM.Class where
+
 import Control.Monad (forM_, foldM)
-import Data.List (maximumBy)
-import Data.Ord (comparing)
+import Control.Monad.ST (runST)
 import Data.STRef
-import qualified Data.Matrix.Unboxed as M
-import qualified Data.Matrix.Unboxed.Mutable as MM
-import qualified Data.Vector.Generic as G
-import qualified Data.Vector.Generic.Mutable as GM
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 
-import AI.Function (logSumExpM)
+class Length a where
+    len :: a -> Int
 
--- discrete state and discrete time hidden markov model
-class HMM hmm observ | hmm -> observ where
+class Length ob => HMM h ob | h -> ob where
+
+
     -- | number of states
-    nSt :: hmm -> Int
+    nSt :: h -> Int
 
-    -- | initial state distribution
-    π :: hmm -> Int -> Double
+    -- | get and set initial probability vector
+    getInitProb :: h -> U.Vector Double
+    setInitProb :: U.Vector Double -> h -> h
 
-    -- | transition probability
-    a :: hmm -> Int -> Int -> Double
-    
-    -- | emission probability and its log form
-    b, b' :: hmm -> Int -> observ -> Double
-    b' hmm s = log . b hmm s
+    -- | get and set transition probability matrix
+    getTransProb :: h -> U.Vector Double
+    setTransProb :: U.Vector Double -> h -> h
 
-    baumWelch :: G.Vector v observ => v observ -> hmm -> hmm
+    setEmProb :: ob -> U.Vector Double -> h -> h
 
-    viterbi :: G.Vector v observ => hmm -> v observ -> ([Int], Double)
-    viterbi h ob = foldl track ([],undefined) . init . G.foldl' f [] $ ob
-      where
-        f [] o = [U.generate n $ \i -> (log (π h i) + b' h i o, -1)]
-        f acc@(l_t:_) o =
-            let score i j = fst (G.unsafeIndex l_t i) + log (a h i j)
-                vec = U.generate n $ \j -> let (i, x) = maximumBy (comparing snd) . map (\i' -> (i', score i' j)) $ [0..n-1]
-                                           in (x + b' h j o, i)
-            in vec : acc
-        track ([], _) v = let ((p, prev), i) = G.maximumBy (comparing (fst.fst)) $ G.zip v $ G.enumFromN 0 n
-                          in ([prev, i], p)
-        track (path@(i:_), p) v = (snd (G.unsafeIndex v i) : path, p)
-        n = nSt h
+    -- | initial probability at given state
+    π :: h -> Int -> Double
+    π' :: h -> Int -> Double
 
-    forward :: G.Vector v observ => hmm -> v observ -> (M.Matrix Double, U.Vector Double)
+    -- | transition probability from state i to j, a i j = P(s_t = j | s_t-1 = i)
+    a :: h -> Int -> Int -> Double
+    a' :: h -> Int -> Int -> Double
+
+    -- | emission probability, b o t i = P(O_t | s_t = i)
+    b :: h -> ob -> Int -> Int -> Double
+    b' :: h -> ob -> Int -> Int -> Double
+
+    forward :: h -> ob -> (U.Vector Double, U.Vector Double)
     forward h ob = runST $ do
-        mat <- MM.new (r,c)
-        scales <- GM.replicate c 0
+        mat <- UM.new $ r * c
+        scales <- UM.replicate c 0
         
         -- update first column
         forM_ [0..r-1] $ \i -> do 
-            let x = π h i * b h i (G.head ob)
-            MM.unsafeWrite mat (i,0) x
-            GM.unsafeRead scales 0 >>= GM.unsafeWrite scales 0 . (+x)
-        GM.unsafeRead scales 0 >>= GM.unsafeWrite scales 0 . (1/)
+            let x = π h i * b h ob 0 i
+            UM.unsafeWrite mat (i*c) x
+            UM.unsafeRead scales 0 >>= UM.unsafeWrite scales 0 . (+x)
+        UM.unsafeRead scales 0 >>= UM.unsafeWrite scales 0 . (1/)
         -- normalize
-        sc0 <- GM.unsafeRead scales 0
-        forM_ [0..r-1] $ \i -> MM.unsafeRead mat (i,0) >>= MM.unsafeWrite mat (i,0) . (*sc0)
+        sc0 <- UM.unsafeRead scales 0
+        forM_ [0..r-1] $ \i -> UM.unsafeRead mat (i*c) >>= UM.unsafeWrite mat (i*c) . (*sc0)
 
         -- update the rest of columns
         forM_ [1..c-1] $ \t -> do
             forM_ [0..r-1] $ \j -> do
                 temp <- newSTRef 0
                 forM_ [0..r-1] $ \i -> do
-                    α_it' <- MM.unsafeRead mat (i,t-1)
+                    α_it' <- UM.unsafeRead mat $ i*c+(t-1)
                     modifySTRef' temp (+ α_it' * a h i j)
-                modifySTRef' temp (* b h j (ob `G.unsafeIndex` t))
+                modifySTRef' temp (* b h ob t j)
                 x <- readSTRef temp
-                MM.unsafeWrite mat (j,t) x
-                GM.unsafeRead scales t >>= GM.unsafeWrite scales t . (+x)
-            GM.unsafeRead scales t >>= GM.unsafeWrite scales t . (1/)
+                UM.unsafeWrite mat (j*c+t) x
+                UM.unsafeRead scales t >>= UM.unsafeWrite scales t . (+x)
+            UM.unsafeRead scales t >>= UM.unsafeWrite scales t . (1/)
             -- normalize
-            sc <- GM.unsafeRead scales t
-            forM_ [0..r-1] $ \j -> MM.unsafeRead mat (j,t) >>= MM.unsafeWrite mat (j,t) . (*sc)
+            sc <- UM.unsafeRead scales t
+            forM_ [0..r-1] $ \j -> UM.unsafeRead mat (j*c+t) >>= UM.unsafeWrite mat (j*c+t) . (*sc)
 
-        mat' <- MM.unsafeFreeze mat
-        scales' <- G.unsafeFreeze scales
+        mat' <- U.unsafeFreeze mat
+        scales' <- U.unsafeFreeze scales
         return (mat', scales')
       where
         r = nSt h
-        c = G.length ob
+        c = len ob
     {-# INLINE forward #-}
 
-    -- | forward algorithm in log scale
-    -- because in high dimension settings the pdf can be super small, the probability
-    -- must be in log scale to prevent underflow. Moreover, even the probability is
-    -- in log scale, it still can underflow in a long run (a long sequence of obervations).
-    -- Therefore, we need to properly scale the probability at each iteration.
-    forward' :: G.Vector v observ => hmm -> v observ -> (M.Matrix Double, U.Vector Double)
-    forward' h ob = runST $ do
-        mat <- MM.new (r,c)
-        scales <- GM.new c
-
-        -- update first column
-        temp0 <- UM.new r
-        forM_ [0..r-1] $ \i -> do
-            let x = log (π h i) + b' h i (G.head ob)
-            GM.unsafeWrite temp0 i x
-        s0 <- fmap negate . logSumExpM $ temp0
-        GM.unsafeWrite scales 0 s0
-        -- normalize
-        forM_ [0..r-1] $ \i -> GM.unsafeRead temp0 i >>= MM.unsafeWrite mat (i,0) . (+s0)
-
-        -- update the rest of columns
-        forM_ [1..c-1] $ \t -> do
-            temp <- UM.new r
-            forM_ [0..r-1] $ \j -> do
-                sum_α_a <- foldM ( \acc i -> do
-                    α_it' <- MM.unsafeRead mat (i,t-1)
-                    return $! acc + exp (α_it' + log (a h i j)) ) 0 [0..r-1]
-                GM.unsafeWrite temp j $ log sum_α_a + b' h j (ob `G.unsafeIndex` t)
-
-            s <- fmap negate . logSumExpM $ temp
-            GM.unsafeWrite scales t s
-            -- normalize
-            forM_ [0..r-1] $ \i -> GM.unsafeRead temp i >>= MM.unsafeWrite mat (i,t) . (+s)
-        
-        mat' <- MM.unsafeFreeze mat
-        scales' <- G.unsafeFreeze scales
-        return (mat', scales')
-      where
-        r = nSt h
-        c = G.length ob
-    {-# INLINE forward' #-}
-
-    backward :: G.Vector v observ => hmm -> v observ -> U.Vector Double -> M.Matrix Double
-    backward h ob scales = MM.create $ do
-        mat <- MM.new (r,c)
+    backward :: h -> ob -> U.Vector Double -> U.Vector Double
+    backward h ob scales = U.create $ do
+        mat <- UM.new (r*c)
         -- fill in last column
-        forM_ [0..r-1] $ \i -> MM.unsafeWrite mat (i,c-1) $ G.last scales
+        forM_ [0..r-1] $ \i -> UM.unsafeWrite mat (i*c+c-1) $ U.last scales
         
         forM_ [c-2,c-3..0] $ \t -> do
-            let sc = scales `G.unsafeIndex` t
+            let sc = scales `U.unsafeIndex` t
             forM_ [0..r-1] $ \i -> do
                 let f !acc j = do
-                        let b_jo = b h j $ ob `G.unsafeIndex` (t+1)
+                        let b_jo = b h ob (t+1) j
                             a_ij = a h i j
-                        β_jt' <- MM.unsafeRead mat (j,t+1)
+                        β_jt' <- UM.unsafeRead mat (j*c+t+1)
                         return $ acc + b_jo * a_ij * β_jt'
                 x <- foldM f 0 [0..r-1]
-                MM.unsafeWrite mat (i,t) $ sc * x
+                UM.unsafeWrite mat (i*c+t) $ sc * x
         return mat
       where
         r = nSt h
-        c = G.length ob
+        c = len ob
     {-# INLINE backward #-}
 
-    -- | backward in log scale
-    backward' :: G.Vector v observ => hmm -> v observ -> U.Vector Double -> M.Matrix Double
-    backward' h ob scales = MM.create $ do
-        mat <- MM.new (r,c)
-        -- fill in last column
-        forM_ [0..r-1] $ \i -> MM.unsafeWrite mat (i,c-1) $ G.last scales
-        
-        forM_ [c-2,c-3..0] $ \t -> do
-            let sc = scales `G.unsafeIndex` t
-            forM_ [0..r-1] $ \i -> do
-                temp <- UM.new r
-                forM_ [0..r-1] $ \j -> do
-                    let b_jo = b' h j $ ob `G.unsafeIndex` (t+1)
-                        a_ij = log $ a h i j
-                    β_jt' <- MM.unsafeRead mat (j,t+1)
-                    UM.unsafeWrite temp j $! b_jo + a_ij + β_jt'
-                x <- logSumExpM temp
-                MM.unsafeWrite mat (i,t) $! x + sc
-        return mat
+    baumWelch :: ob -> h -> h
+    baumWelch ob h = setInitProb ini' . setTransProb trans' . setEmProb ob γ $ h
       where
+        ini' = U.slice 0 r γ
+        trans' = U.create $ do
+            mat <- UM.replicate (r*r) 0
+            forM_ [1 .. c-1] $ \t ->
+                forM_ [0..r-1] $ \i -> do
+                    let α_it' = fw `U.unsafeIndex` (i*c+t-1)
+                    forM_ [0..r-1] $ \j -> do
+                        let a_ij = a h i j
+                            b_jo = b h ob t j
+                            β_jt = bw `U.unsafeIndex` (j*c+t)
+                        UM.unsafeRead mat (i*c+j) >>= UM.unsafeWrite mat (i*c+j) .
+                            (+) (α_it' * a_ij * b_jo * β_jt)
+            normalize mat
+            return mat
+
+        (fw, scales) = forward h ob
+        bw = backward h ob scales
+        γ = U.generate (r*c) $ \i -> fw `U.unsafeIndex` i * bw `U.unsafeIndex` i / scales `U.unsafeIndex` (i `mod` r)
         r = nSt h
-        c = G.length ob
-    {-# INLINE backward' #-}
+        c = len ob 
 
-    -- | log likelihood of obervations
-    loglik :: G.Vector v observ => hmm -> v observ -> Double
-    loglik h = loglikFromScales . snd . forward h
-
-    {-# MINIMAL nSt, π, a, b, baumWelch #-}
-
--- | compute log likelihood from scales of forward probabilities vector
-loglikFromScales :: U.Vector Double -> Double
-loglikFromScales = G.sum . G.map (negate . log)
-{-# INLINE loglikFromScales #-}
+        normalize mat = forM_ [0..r-1] $ \i -> do
+            temp <- newSTRef 0
+            forM_ [0..c-1] $ \j -> UM.unsafeRead mat (i*c+j) >>= modifySTRef' temp . (+) 
+            s <- readSTRef temp
+            forM_ [0..c-1] $ \j -> UM.unsafeRead mat (i*c+j) >>= UM.unsafeWrite mat (i*c+j) . (/s)
