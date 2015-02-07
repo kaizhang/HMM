@@ -17,7 +17,11 @@ cabal-version:       >=1.10
 
 library
   exposed-modules:
-    AI.HMM.Class
+      AI.Function
+    , AI.HMM.Basic
+    , AI.HMM.Class
+    , AI.HMM.Gaussian
+    , AI.HMM.Type
 
   -- other-modules:       
   build-depends:
@@ -33,6 +37,7 @@ library
     , primitive
     , statistics
     , vector >=0.10 && <0.11
+    , data-default-class
 
 
   hs-source-dirs:      src
