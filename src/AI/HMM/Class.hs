@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module AI.HMM.Class
     ( HMMLike(..)
@@ -15,13 +16,14 @@ import Data.STRef
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 import System.Random.MWC
-import Data.Default.Class
 
 import AI.Function
 
 import Debug.Trace
 
 class HMMLike h ob | h -> ob where
+    data MStepOpt h :: *
+
     -- | number of states
     nSt :: h -> Int
 
@@ -36,7 +38,8 @@ class HMMLike h ob | h -> ob where
     -- | get and set transition probability matrix
     setTransProb :: U.Vector Double -> h -> h
 
-    setEmProb :: ob -> U.Vector Double -> h -> h
+    -- | given the posterior probability, compute new emission distribution
+    updateEmission :: ob -> U.Vector Double -> h -> MStepOpt h -> h
 
     -- | initial probability at given state
     π :: h -> Int -> Double
@@ -182,8 +185,8 @@ class HMMLike h ob | h -> ob where
         c = len h ob
     {-# INLINE backward' #-}
 
-    baumWelch :: ob -> h -> (h, U.Vector Double)
-    baumWelch ob h = (setInitProb ini' . setTransProb trans' . setEmProb ob γ $ h, U.map log scales)
+    baumWelch :: MStepOpt h -> ob -> h -> (h, U.Vector Double)
+    baumWelch opt ob h = (setInitProb ini' . setTransProb trans' . updateEmission ob γ h $ opt, U.map log scales)
       where
         ini' = U.generate r $ \i -> γ `U.unsafeIndex` (i*c)
         trans' = U.create $ do
@@ -197,7 +200,11 @@ class HMMLike h ob | h -> ob where
                             β_jt = bw `U.unsafeIndex` (j*c+t)
                         UM.unsafeRead mat (i*r+j) >>= UM.unsafeWrite mat (i*r+j) .
                             (+) (α_it' * a_ij * b_jo * β_jt)
-            normalize mat
+            forM_ [0..r-1] $ \i -> do
+                temp <- newSTRef 0
+                forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= modifySTRef' temp . (+) 
+                s <- readSTRef temp
+                forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= UM.unsafeWrite mat (i*r+j) . (/s)
             return mat
 
         (fw, scales) = forward h ob
@@ -206,15 +213,10 @@ class HMMLike h ob | h -> ob where
         r = nSt h
         c = len h ob
 
-        normalize mat = forM_ [0..r-1] $ \i -> do
-            temp <- newSTRef 0
-            forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= modifySTRef' temp . (+) 
-            s <- readSTRef temp
-            forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= UM.unsafeWrite mat (i*r+j) . (/s)
     {-# INLINE baumWelch #-}
 
-    baumWelch' :: ob -> h -> (h, U.Vector Double)
-    baumWelch' ob h = (setInitProb ini' . setTransProb trans' . setEmProb ob (U.map exp γ) $ h, scales)
+    baumWelch' :: MStepOpt h -> ob -> h -> (h, U.Vector Double)
+    baumWelch' opt ob h = (setInitProb ini' . setTransProb trans' . updateEmission ob (U.map exp γ) h $ opt, scales)
       where
         ini' = U.generate r $ \i -> γ `U.unsafeIndex` (i*c)
 
@@ -231,7 +233,9 @@ class HMMLike h ob | h -> ob where
                         UM.unsafeWrite temp (t-1) $ b_jo + α_it' + β_jt
                     x <- logSumExpM temp
                     UM.unsafeWrite mat (i*r+j) $ a_ij + x
-            normalize mat
+            forM_ [0..r-1] $ \i -> do
+                s <- logSumExpM $ UM.slice (i*r) r mat
+                forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= UM.unsafeWrite mat (i*r+j) . subtract s
             return mat
 
         (fw, scales) = forward' h ob
@@ -239,41 +243,35 @@ class HMMLike h ob | h -> ob where
         γ = U.generate (r*c) $ \i -> fw `U.unsafeIndex` i + bw `U.unsafeIndex` i - scales `U.unsafeIndex` (i `mod` c)
         r = nSt h
         c = len h ob
-        normalize mat = forM_ [0..r-1] $ \i -> do
-            s <- logSumExpM $ UM.slice (i*r) r mat
-            forM_ [0..r-1] $ \j -> UM.unsafeRead mat (i*r+j) >>= UM.unsafeWrite mat (i*r+j) . subtract s
     {-# INLINE baumWelch' #-}
 
-    randHMM :: PrimMonad m => Gen (PrimState m) -> Int -> Int -> m h
+    randHMM :: PrimMonad m => Gen (PrimState m) -> HMMOpt h -> m h
 
-    fitHMM :: ob -> Int -> Int -> HMMOpt h -> h
-    fitHMM ob m n opt = runST $ do
+    fitHMM :: ob -> HMMOpt h -> h
+    fitHMM ob opt = runST $ do
         g <- restore $ _seed opt
         initialHMM <- case _initialization opt of
             Fixed inithmm -> return inithmm
-            Random -> randHMM g m n
-        let updateFn | isLogProb initialHMM = baumWelch'
-                     | otherwise = baumWelch
-        loop updateFn initialHMM 0
-      where
-        loop f !h !i | i >= _nIter opt = return h
-                     | otherwise = do
-                         let (h', scales) = f ob h
-                         traceShow (negate . U.sum $ scales) $ return ()
-                         loop f h' $ i+1
+            Random -> randHMM g opt
+        let updateFn | isLogProb initialHMM = baumWelch' (_mStepOpt opt)
+                     | otherwise = baumWelch (_mStepOpt opt)
+            iter = _nIter opt
+            loop !h !i | i >= iter = return h
+                       | otherwise = do
+                           let (h', scales) = updateFn ob h
+                           traceShow (negate . U.sum $ scales) $ return ()
+                           loop h' $ i+1
+        loop initialHMM 0
 
 data HMMOpt h = HMMOpt
     { _seed :: !Seed
     , _initialization :: !(Initialization h)
     , _nIter :: !Int
+    , _nStates :: !Int
+    , _nObs :: !Int
+    , _nMixture :: !Int
+    , _mStepOpt :: !(MStepOpt h)
     }
 
 data Initialization h = Fixed h
                       | Random
-
-instance Default (HMMOpt h) where
-    def = HMMOpt
-        { _seed = toSeed $ U.fromList [22]
-        , _initialization = Random
-        , _nIter = 50
-        }

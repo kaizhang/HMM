@@ -1,11 +1,13 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TypeFamilies #-}
 module AI.HMM.Basic
     ( BasicHMM
     ) where
 
 import Control.Monad (forM_, liftM, replicateM)
+import Data.Default.Class
 import Data.STRef
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Matrix.Unboxed as MU
@@ -27,6 +29,8 @@ instance HMMLike BasicHMM (U.Vector Int) where
     len _ = U.length
 
     isLogProb = const False
+    
+    data MStepOpt BasicHMM = Empty
 
     π h i = _startProb h `U.unsafeIndex` i
 
@@ -41,7 +45,7 @@ instance HMMLike BasicHMM (U.Vector Int) where
 
     setTransProb x h = h {_transitionProb=MU.fromVector (nSt h,nSt h) x}
 
-    setEmProb ob ps h = h {_emission=em'}
+    updateEmission ob ps h _ = h {_emission=em'}
       where
         em' = MUM.create $ do
             mat <- MUM.replicate (r, c) 0
@@ -61,19 +65,31 @@ instance HMMLike BasicHMM (U.Vector Int) where
         c = _boundOb h
         l = len h ob
 
-    randHMM g states obs = do
+    randHMM g opt = do
         let randProbVector = liftM normalize . uniformVector g
             normalize xs = U.map (/ U.sum xs) xs
-        startProb <- randProbVector states
-        transProb <- liftM MU.fromRows $ replicateM states $ randProbVector states
-        em <- liftM MU.fromRows $ replicateM states $ randProbVector obs
-        return $ BasicHMM startProb transProb em obs
+        startProb <- randProbVector s
+        transProb <- liftM MU.fromRows $ replicateM s $ randProbVector s
+        em <- liftM MU.fromRows $ replicateM s $ randProbVector nOb
+        return $ BasicHMM startProb transProb em nOb
+      where
+        s = _nStates opt
+        nOb = _nObs opt
+
+instance Default (HMMOpt BasicHMM) where
+    def = HMMOpt
+        { _seed = toSeed $ U.fromList [22]
+        , _initialization = Random
+        , _nIter = 50
+        , _nStates = 2
+        , _nObs = 2
+        , _nMixture = 0
+        , _mStepOpt = Empty
+        }
 
 exampleData :: U.Vector Int
 exampleData = U.fromList [1,2,3,0,1,1,1,0,2,3,2,2,2,3,0,0,0,1,1,1,2,2,2,0,1,1]
 
-{-
 test :: IO ()
-test = do h <- fitHMM exampleData 2 4 200 :: IO BasicHMM
+test = do let h = fitHMM exampleData def {_nObs=4} :: BasicHMM
           print h
--}
