@@ -55,3 +55,15 @@ weightedMeanCovMatrix ws xs | G.length ws /= MU.rows xs = error $ (show $ MU.row
         return mat
     n = MU.cols xs
 {-# INLINE weightedMeanCovMatrix #-}
+
+-- | return the weighted mean and the diagonal of covariance matrix
+weightedMeanDiagCov :: G.Vector v Double => U.Vector Double -> MU.Matrix Double -> (v Double, v Double)
+weightedMeanDiagCov ws xs | G.length ws /= MU.rows xs = error $ (show $ MU.rows xs) ++ "/" ++ (show $ G.length ws)
+                             | otherwise = (means, diag)
+  where
+    means = G.generate n $ \i -> meanWeighted $ G.zip (xs `MU.takeColumn` i) ws
+    diag = G.generate n $ \i -> let x = xs `MU.takeColumn` i
+                                    m = means G.! i
+                                in covWeighted ws (x,m) (x,m)
+    n = MU.cols xs
+{-# INLINE weightedMeanDiagCov #-}

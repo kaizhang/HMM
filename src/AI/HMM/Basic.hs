@@ -83,7 +83,7 @@ instance Default (HMMOpt BasicHMM) where
         , _nIter = 50
         , _nStates = 2
         , _nObs = 2
-        , _nMixture = 0
+        , _nMix = 1
         , _mStepOpt = Empty
         }
 

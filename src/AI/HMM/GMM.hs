@@ -23,7 +23,7 @@ data GMMHMM = GMMHMM
     { _startProb :: !(U.Vector Double)
     , _transitionProb :: !(MU.Matrix Double)
     , _emission :: !(V.Vector MixMVN)
-    , _nMix :: !Int
+    , _mixtures :: !Int
     } deriving (Show)
 
 bM :: GMMHMM -> MU.Matrix Double -> Int -> Int -> Int -> Double
@@ -63,13 +63,17 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
                 let ws = U.slice ((i*m+k)*c) c ps
                     (mean, cov) = weightedMeanCovMatrix ws ob
                 in (U.sum ws, mvn mean cov)
+            DiagonalCov -> V.generate r $ \i -> f . V.generate m $ \k ->
+                let ws = U.slice ((i*m+k)*c) c ps
+                    (mean, cov) = weightedMeanDiagCov ws ob
+                in (U.sum ws, mvnDiag mean cov)
             _ -> undefined
         f :: V.Vector (Double, MVN) -> MixMVN
         f xs = MixMVN $ V.map (first (log . (/s))) xs
           where s = V.foldl' (\acc x -> fst x + acc) 0 xs
         r = nSt h
         c = len h ob
-        m = _nMix h
+        m = _mixtures h
 
     -- | forward probability
     forward' h ob = runST $ do
@@ -110,7 +114,7 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
       where
         r = nSt h
         c = len h ob
-        m = _nMix h
+        m = _mixtures h
     {-# INLINE forward' #-}
 
 {-
@@ -134,7 +138,7 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
       where
         r = nSt h
         c = len h ob
-        m = _nMix h
+        m = _mixtures h
     {-# INLINE backward' #-}
     -}
 
@@ -167,7 +171,7 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
         γ = U.generate (r*c) $ \i -> logSumExp $ U.generate m $ \x -> γ' `U.unsafeIndex` (((i `div` c) * m + x) * c +  (i `mod` c))
         r = nSt h
         c = len h ob
-        m = _nMix h
+        m = _mixtures h
     {-# INLINE baumWelch' #-}
 
     randHMM g opt = do
@@ -187,7 +191,7 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
       where
         s = _nStates opt
         p = _nObs opt
-        m = _nMixture opt
+        m = _nMix opt
         
 
 instance Default (HMMOpt GMMHMM) where
@@ -197,8 +201,8 @@ instance Default (HMMOpt GMMHMM) where
         , _nIter = 50
         , _nStates = 2
         , _nObs = 1
-        , _nMixture = 2
-        , _mStepOpt = MStepOpt FullCov
+        , _nMix = 2
+        , _mStepOpt = MStepOpt DiagonalCov
         }
 
 test :: IO ()

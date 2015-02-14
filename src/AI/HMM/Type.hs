@@ -8,6 +8,10 @@ import Numeric.LinearAlgebra.HMatrix
 
 import AI.Function
 
+-- constant: log (2*pi)
+m_log_2_pi :: Double
+m_log_2_pi = 1.8378770664093453
+
 -- | multivariate normal distribution
 data MVN = MVN
     { _mean :: !(U.Vector Double)
@@ -34,6 +38,15 @@ mvn m cov | d*d /= U.length cov = error "incompatible dimemsion of mean and cova
     d = U.length m
 {-# INLINE mvn #-}
 
+mvnDiag :: U.Vector Double -> U.Vector Double -> MVN
+mvnDiag m cov | d /= U.length cov = error "incompatible dimemsion of mean and covariance"
+              | otherwise = MVN m cov invcov logdet d Diagonal
+  where
+    invcov = U.map (1/) cov
+    logdet = U.sum invcov
+    d = U.length m
+{-# INLINE mvnDiag #-}
+
 {-
 -- | log probability of MVN
 logPDF :: MVN -> Vector Double -> Double
@@ -47,16 +60,18 @@ logPDF (MVN m _ invcov logdet) x = -0.5 * ( d * log (2*pi) + logdet
 -}
 
 logPDF :: MVN -> U.Vector Double -> Double
-logPDF (MVN m _ invcov logdet d _) x = -0.5 * (fromIntegral d * log (2*pi) + logdet + quadTerm)
+logPDF (MVN m _ invcov logdet d t) x = -0.5 * (fromIntegral d * m_log_2_pi + logdet + quadTerm)
   where
-    quadTerm = loop 0 0
+    quadTerm = case t of
+        Full -> loop 0 0
+        Diagonal -> U.sum $ U.zipWith (*) invcov x'
       where
-        x' = U.zipWith (-) x m
         loop !acc !i
             | i < d*d = let r = i `div` d
                             c = i `mod` d
                         in acc + U.unsafeIndex invcov i * U.unsafeIndex x' r * U.unsafeIndex x' c
             | otherwise = acc
+        x' = U.zipWith (-) x m
 {-# INLINE logPDF #-}
 
 

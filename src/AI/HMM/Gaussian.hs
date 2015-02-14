@@ -1,11 +1,18 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
-module AI.HMM.Gaussian where
+module AI.HMM.Gaussian
+    ( GaussianHMM(..)
+    , module AI.HMM.Class
+    ) where
 
+import Algorithms.GLasso (glasso)
+import Control.Lens
 import Control.Monad (liftM, replicateM)
 import Data.Default.Class
 import qualified Data.Vector as V
+import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Matrix.Unboxed as MU
 import System.Random.MWC
@@ -23,6 +30,7 @@ data GaussianHMM = GaussianHMM
 instance HMMLike GaussianHMM (MU.Matrix Double) where
     data MStepOpt GaussianHMM = MStepOpt
         { _covEstimator :: !CovEstimator
+        , _lambda :: !Double  -- ^ glasso parameter
         }
 
     nSt = U.length . _startProb
@@ -45,31 +53,33 @@ instance HMMLike GaussianHMM (MU.Matrix Double) where
 
     updateEmission ob ps h opt = h {_emission=em'}
       where
-        em' = case _covEstimator opt of
-            FullCov -> V.generate r $ \i ->
-                let ws = U.slice (i*c) c ps
-                    (mean, cov) = weightedMeanCovMatrix ws ob
-                in mvn mean cov
-            DiagonalCov -> V.generate r $ \i ->
-                let ws = U.slice (i*c) c ps
-                    (mean, cov) = weightedMeanCovMatrix ws ob
-                    n = U.length mean
-                in mvn mean $ U.imap (\x v -> if x `div` n /= x `mod` n then 0 else v) cov
-            _ -> undefined
+        em' = V.generate r $ \i -> estimateMVN ob $ U.slice (i*c) c ps
+        estimateMVN o ws = case _covEstimator opt of
+            FullCov -> let (mean, cov) = weightedMeanCovMatrix ws o
+                       in mvn mean cov
+            DiagonalCov -> let (mean, cov) = weightedMeanDiagCov ws o
+                           in mvnDiag mean cov
+            LassoCov -> let (mean, cov) = weightedMeanCovMatrix ws o
+                            (cov', _) = glasso (G.length mean) cov $ _lambda opt
+                        in mvn (U.convert mean) $ U.convert cov'
         r = nSt h
         c = len h ob
+    {-# INLINE updateEmission #-}
 
-    randHMM g n p = do
+    randHMM g opt = do
         let randProbVector = liftM normalize . uniformVector g
             normalize xs = U.map log $ U.map (/ U.sum xs) xs
             randMVN = do
                 m <- uniformVector g p
                 d <- uniformVector g p
                 return $ mvn m $ MU.flatten $ MU.diag (d :: V.Vector Double)
-        startProb <- randProbVector n
-        transProb <- liftM MU.fromRows $ replicateM n $ randProbVector n
-        em <- liftM V.fromList $ replicateM n randMVN
+        startProb <- randProbVector s
+        transProb <- liftM MU.fromRows $ replicateM s $ randProbVector s
+        em <- liftM V.fromList $ replicateM s randMVN
         return $ GaussianHMM startProb transProb em
+      where
+        s = _nStates opt
+        p = _nObs opt
 
 instance Default (HMMOpt GaussianHMM) where
     def = HMMOpt
@@ -78,22 +88,6 @@ instance Default (HMMOpt GaussianHMM) where
         , _nIter = 50
         , _nStates = 2
         , _nObs = 1
-        , _nMixture = 1
-        , _mStepOpt = MStepOpt FullCov
+        , _nMix = 1
+        , _mStepOpt = MStepOpt FullCov 0.01
         }
-
-example :: (GaussianHMM, MU.Matrix Double)
-example = (hmm, obs)
-  where
-    hmm = GaussianHMM (U.fromList $ map log [0.5,0.5])
-                      (MU.fromLists $ (map.map) log [[0.1,0.9],[0.5,0.5]])
-                      (V.fromList [m1,m2])
-    m1 = mvn (U.fromList [1]) (U.fromList [1])
-    m2 = mvn (U.fromList [-1]) (U.fromList [1])
-    obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
-                                   , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
-
-test :: IO ()
-test = do
-    let h = fitHMM (snd example) def {_initialization=Fixed (fst example)}:: GaussianHMM
-    print h

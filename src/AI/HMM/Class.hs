@@ -1,3 +1,4 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FunctionalDependencies #-}
@@ -6,9 +7,17 @@
 module AI.HMM.Class
     ( HMMLike(..)
     , HMMOpt(..)
+    , seed
+    , initialization
+    , nIter
+    , nStates
+    , nObs
+    , nMix
+    , mStepOpt
     , Initialization(..)
     ) where
 
+import Control.Lens (makeLenses)
 import Control.Monad (forM_, foldM)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad.ST (runST)
@@ -263,15 +272,17 @@ class HMMLike h ob | h -> ob where
                            loop h' $ i+1
         loop initialHMM 0
 
+data Initialization h = Fixed h
+                      | Random
+
 data HMMOpt h = HMMOpt
     { _seed :: !Seed
     , _initialization :: !(Initialization h)
     , _nIter :: !Int
     , _nStates :: !Int
     , _nObs :: !Int
-    , _nMixture :: !Int
+    , _nMix :: !Int
     , _mStepOpt :: !(MStepOpt h)
     }
 
-data Initialization h = Fixed h
-                      | Random
+makeLenses ''HMMOpt
