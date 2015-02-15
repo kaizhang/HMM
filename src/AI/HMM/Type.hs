@@ -43,7 +43,7 @@ mvnDiag m cov | d /= U.length cov = error "incompatible dimemsion of mean and co
               | otherwise = MVN m cov invcov logdet d Diagonal
   where
     invcov = U.map (1/) cov
-    logdet = U.sum invcov
+    logdet = log $ U.sum cov
     d = U.length m
 {-# INLINE mvnDiag #-}
 
@@ -64,7 +64,7 @@ logPDF (MVN m _ invcov logdet d t) x = -0.5 * (fromIntegral d * m_log_2_pi + log
   where
     quadTerm = case t of
         Full -> loop 0 0
-        Diagonal -> U.sum $ U.zipWith (*) invcov x'
+        Diagonal -> U.sum $ U.zipWith (*) invcov $ U.map (**2) x'
       where
         loop !acc !i
             | i < d*d = let r = i `div` d

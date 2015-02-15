@@ -18,9 +18,11 @@ cabal-version:       >=1.10
 library
   exposed-modules:
       AI.Function
+    , AI.GMM
     , AI.HMM.Basic
     , AI.HMM.Class
     , AI.HMM.Gaussian
+    , AI.HMM.GMM
     , AI.HMM.Type
 
   -- other-modules:       
