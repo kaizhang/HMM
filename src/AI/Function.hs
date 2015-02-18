@@ -36,7 +36,7 @@ covWeighted ws (xs, mx) (ys, my) = g . G.foldl' f (0,0) $ U.enumFromN 0 $ G.leng
                       x = xs G.! i
                       y = ys G.! i
                   in (a + w * (x - mx) * (y - my), b+w)
-    g (a,b) | a == 0 || b == 0 = trace "zero covariance" 1e-200 -- pseudocount
+    g (a,b) | a == 0 || b == 0 = traceShow ("zero covariance", a, b) 1e-200
             | otherwise = a / b
 {-# INLINE covWeighted #-}
 

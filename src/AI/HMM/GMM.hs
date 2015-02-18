@@ -174,7 +174,7 @@ instance HMMLike GMMHMM (MU.Matrix Double) where
         m = _mixtures h
     {-# INLINE baumWelch' #-}
 
-    randHMM g opt = do
+    randHMM g _ opt = do
         let randProbVector = liftM normalize . uniformVector g
             normalize xs = U.map log $ U.map (/ U.sum xs) xs
             randMVN = do

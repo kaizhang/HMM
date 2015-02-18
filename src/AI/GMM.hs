@@ -50,11 +50,11 @@ fitGMM xs opt = loop (_nIter opt) initM
         let k = i `div` n
             x = xs `MU.takeRow` (i `mod` n)
             (w, mvn) = mvns V.! k
-        in exp $ w + logPDF mvn x
+        in w + logPDF mvn x
       where
         normalize v =
-            let sums = U.generate n $ \j -> U.sum . U.map (\i -> v U.! (i*n+j)) . U.enumFromN 0 $ s
-            in U.imap (\i x -> x / (sums U.! (i `mod` n))) v
+            let sums = U.generate n $ \j -> logSumExp . U.map (\i -> v U.! (i*n+j)) . U.enumFromN 0 $ s
+            in U.imap (\i x -> exp $ x - (sums U.! (i `mod` n))) v
 
     mStep :: U.Vector Double -> MixMVN
     mStep ws = case _covEstimator opt of
@@ -73,27 +73,28 @@ fitGMM xs opt = loop (_nIter opt) initM
         Fixed m -> m
         Random -> runST $ do
             g <- restore $ _seed opt
-            let randProbVector = liftM normalize . uniformVector g
-                normalize x = U.map log $ U.map (/ U.sum x) x
-                randMVN = do
-                    m <- uniformVector g p
-                    d <- uniformVector g p
-                    return $ mvn m $ MU.flatten $ MU.diag (d :: V.Vector Double)
-                randMVNMix = do mvns <- replicateM s randMVN
-                                ws <- randProbVector s
-                                return $ MixMVN $ V.zip (V.convert ws) $ V.fromList mvns
-            randMVNMix
+            v <- uniformVector g (s*n)
+            let sums = U.generate n $ \j -> U.sum . U.map (\i -> v U.! (i*n+j)) . U.enumFromN 0 $ s
+                v' = U.imap (\i x -> x / (sums U.! (i `mod` n))) v
+            return $ mStep v'
 
     f :: V.Vector (Double, MVN) -> MixMVN
-    f xs = MixMVN $ V.map (first (log . (/s))) xs
-      where s = V.foldl' (\acc x -> fst x + acc) 0 xs
+    f xs = MixMVN $ V.map (first (log . (/t))) xs
+      where t = V.foldl' (\acc x -> fst x + acc) 0 xs
     s = _nMix opt
     n = MU.rows xs
     p = MU.cols xs
 
 test :: IO ()
 test = do
-    let obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
-                                    , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050, 1,2,-0.5 ]
+    let -- obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
+        --                            , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050, 1,2,-0.5 ]
+        obs = MU.fromLists $ [ [ -31,-2]
+                             , [3.2,0.5]
+                             , [100,10]
+                             , [-13.2,-100]
+                             , [-40,-4]
+                             , [0,100]
+                             ]
         h = fitGMM obs def
     print h

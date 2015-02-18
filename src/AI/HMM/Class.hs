@@ -221,7 +221,6 @@ class HMMLike h ob | h -> ob where
         γ = U.generate (r*c) $ \i -> fw `U.unsafeIndex` i * bw `U.unsafeIndex` i / scales `U.unsafeIndex` (i `mod` c)
         r = nSt h
         c = len h ob
-
     {-# INLINE baumWelch #-}
 
     baumWelch' :: MStepOpt h -> ob -> h -> (h, U.Vector Double)
@@ -254,14 +253,14 @@ class HMMLike h ob | h -> ob where
         c = len h ob
     {-# INLINE baumWelch' #-}
 
-    randHMM :: PrimMonad m => Gen (PrimState m) -> HMMOpt h -> m h
+    randHMM :: PrimMonad m => Gen (PrimState m) -> ob -> HMMOpt h -> m h
 
     fitHMM :: ob -> HMMOpt h -> h
     fitHMM ob opt = runST $ do
         g <- restore $ _seed opt
         initialHMM <- case _initialization opt of
             Fixed inithmm -> return inithmm
-            Random -> randHMM g opt
+            Random -> randHMM g ob opt
         let updateFn | isLogProb initialHMM = baumWelch' (_mStepOpt opt)
                      | otherwise = baumWelch (_mStepOpt opt)
             iter = _nIter opt

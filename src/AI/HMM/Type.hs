@@ -43,7 +43,7 @@ mvnDiag m cov | d /= U.length cov = error "incompatible dimemsion of mean and co
               | otherwise = MVN m cov invcov logdet d Diagonal
   where
     invcov = U.map (1/) cov
-    logdet = log $ U.sum cov
+    logdet = U.sum . U.map log $ cov
     d = U.length m
 {-# INLINE mvnDiag #-}
 

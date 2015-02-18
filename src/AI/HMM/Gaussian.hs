@@ -66,20 +66,22 @@ instance HMMLike GaussianHMM (MU.Matrix Double) where
         c = len h ob
     {-# INLINE updateEmission #-}
 
-    randHMM g opt = do
+    randHMM g obs opt = do
         let randProbVector = liftM normalize . uniformVector g
             normalize xs = U.map log $ U.map (/ U.sum xs) xs
-            randMVN = do
-                m <- uniformVector g p
-                d <- uniformVector g p
-                return $ mvn m $ MU.flatten $ MU.diag (d :: V.Vector Double)
         startProb <- randProbVector s
         transProb <- liftM MU.fromRows $ replicateM s $ randProbVector s
-        em <- liftM V.fromList $ replicateM s randMVN
-        return $ GaussianHMM startProb transProb em
+        let h = GaussianHMM startProb transProb V.empty
+
+        ws <- uniformVector g (s*n)
+        let sums = U.generate n $ \j -> U.sum . U.map (\i -> ws U.! (i*n+j)) . U.enumFromN 0 $ s
+            ws' = U.imap (\i x -> x / (sums U.! (i `mod` n))) ws
+
+        return $ updateEmission obs ws' h $ _mStepOpt opt
       where
         s = _nStates opt
         p = _nObs opt
+        n = MU.rows obs 
 
 instance Default (HMMOpt GaussianHMM) where
     def = HMMOpt
@@ -89,5 +91,26 @@ instance Default (HMMOpt GaussianHMM) where
         , _nStates = 2
         , _nObs = 1
         , _nMix = 1
-        , _mStepOpt = MStepOpt FullCov 0.01
+        , _mStepOpt = MStepOpt DiagonalCov 0.01
         }
+
+test :: IO ()
+test = do
+    let obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
+                                    , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
+        h = fitHMM obs def :: GaussianHMM
+    print h
+
+test2 :: IO ()
+test2 = do
+    let -- obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
+        --                            , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050, 1,2,-0.5 ]
+        obs = MU.fromLists $ [ [ -31,-25]
+                             , [-22.2,-20.0]
+                             , [-25,-30]
+                             , [3.2,10]
+                             , [4,14]
+                             , [5,10]
+                             ]
+        h = fitHMM obs def :: GaussianHMM
+    print h

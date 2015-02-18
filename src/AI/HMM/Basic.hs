@@ -65,7 +65,7 @@ instance HMMLike BasicHMM (U.Vector Int) where
         c = _boundOb h
         l = len h ob
 
-    randHMM g opt = do
+    randHMM g _ opt = do
         let randProbVector = liftM normalize . uniformVector g
             normalize xs = U.map (/ U.sum xs) xs
         startProb <- randProbVector s
