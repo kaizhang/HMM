@@ -22,6 +22,7 @@ import Control.Monad (forM_, foldM)
 import Control.Monad.Primitive (PrimMonad, PrimState)
 import Control.Monad.ST (runST)
 import Data.STRef
+import qualified Data.Matrix.Unboxed as MU
 import qualified Data.Vector.Unboxed as U
 import qualified Data.Vector.Unboxed.Mutable as UM
 import System.Random.MWC
@@ -267,6 +268,75 @@ class HMMLike h ob | h -> ob where
             loop !h !i | i >= iter = return h
                        | otherwise = do
                            let (h', scales) = updateFn ob h
+                           traceShow (negate . U.sum $ scales) $ return ()
+                           loop h' $ i+1
+        loop initialHMM 0
+
+    concatOb :: h -> [ob] -> ob
+
+    baumWelchBag' :: MStepOpt h -> [ob] -> h -> (h, U.Vector Double)
+    baumWelchBag' opt obs h = runST $ do
+        let em init trans ob = do
+                -- update gamma
+                forM_ [0..r-1] $ \i -> do
+                    x <- init `UM.unsafeRead` i
+                    UM.unsafeWrite init i $ x + γ `MU.unsafeIndex` (i,0)
+
+                forM_ [0..r-1] $ \i ->
+                    forM_ [0..r-1] $ \j -> do
+                        let a_ij = a' h i j
+                        temp <- UM.new $ c - 1
+                        forM_ [1 .. c-1] $ \t -> do
+                            let b_jo = b' h ob t j
+                                α_it' = fw `U.unsafeIndex` (i*c+t-1)
+                                β_jt = bw `U.unsafeIndex` (j*c+t)
+                            UM.unsafeWrite temp (t-1) $ b_jo + α_it' + β_jt
+                        x <- logSumExpM temp
+                        UM.unsafeRead trans (i*r+j) >>= UM.unsafeWrite trans (i*r+j) . (+ exp (a_ij + x))
+
+                return (γ, scales)
+              where
+                (fw, scales) = forward' h ob
+                bw = backward' h ob scales
+                γ = MU.fromVector (r,c) $ U.generate (r*c) $ \i -> exp $ fw `U.unsafeIndex` i + bw `U.unsafeIndex` i - scales `U.unsafeIndex` (i `mod` c)
+                c = len h ob
+
+        init' <- UM.replicate r 0
+        tr <- UM.replicate (r*r) 0
+
+        (gammas, scales) <- fmap unzip $ mapM (em init' tr) obs
+
+        -- normalize
+        s <- sumM init'
+        forM_ [0..r-1] $ \i ->
+            UM.unsafeRead init' i >>= UM.unsafeWrite init' i . (/s)
+
+        forM_ [0..r-1] $ \i -> do
+            sum' <- sumM $ UM.slice (i*r) r tr
+            forM_ [0..r-1] $ \j -> UM.unsafeRead tr (i*r+j) >>= UM.unsafeWrite tr (i*r+j) . (/sum')
+
+        ini <- U.unsafeFreeze init'
+        tr' <- U.unsafeFreeze tr
+
+        let ws = MU.flatten $ MU.fromColumns $ concatMap MU.toColumns gammas
+
+        return (setInitProb (U.map log ini) . setTransProb (U.map log tr') . updateEmission (concatOb h obs) ws h $ opt, U.concat scales)
+      where
+        r = nSt h
+    {-# INLINE baumWelchBag' #-}
+
+    fitHMMBag :: [ob] -> HMMOpt h -> h
+    fitHMMBag obs opt = runST $ do
+        g <- restore $ _seed opt
+        initialHMM <- case _initialization opt of
+            Fixed inithmm -> return inithmm
+            Random -> randHMM g (head obs) opt
+        let updateFn | isLogProb initialHMM = baumWelchBag' (_mStepOpt opt)
+                     | otherwise = undefined -- baumWelch (_mStepOpt opt)
+            iter = _nIter opt
+            loop !h !i | i >= iter = return h
+                       | otherwise = do
+                           let (h', scales) = updateFn obs h
                            traceShow (negate . U.sum $ scales) $ return ()
                            loop h' $ i+1
         loop initialHMM 0

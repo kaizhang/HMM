@@ -11,6 +11,16 @@ import qualified Data.Matrix.Unboxed as MU
 import Debug.Trace
 import Statistics.Sample
 
+sumM :: (PrimMonad m, GM.MVector v Double) => v (PrimState m) Double -> m Double
+sumM xs = loop xs 0 0
+  where
+    loop v !acc !i
+        | i < n = do x <- GM.unsafeRead xs i
+                     loop v (acc+x) (i+1)
+        | otherwise = return acc
+    n = GM.length xs
+{-# INLINE sumM #-}
+
 logSumExp :: G.Vector v Double => v Double -> Double
 logSumExp xs = m + log (G.foldl' (\acc x -> acc + exp (x-m)) 0 xs)
   where

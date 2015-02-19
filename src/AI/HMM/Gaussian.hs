@@ -51,6 +51,8 @@ instance HMMLike GaussianHMM (MU.Matrix Double) where
 
     setTransProb x h = h {_transitionProb=MU.fromVector (nSt h,nSt h) x}
 
+    concatOb _ obs = MU.fromRows $ concatMap MU.toRows obs
+
     updateEmission ob ps h opt = h {_emission=em'}
       where
         em' = V.generate r $ \i -> estimateMVN ob $ U.slice (i*c) c ps
@@ -99,7 +101,9 @@ test = do
     let obs = MU.fromLists $ map return [ -1.6835, 0.0635, -2.1688, 0.3043, -0.3188
                                     , -0.7835, 1.0398, -1.3558, 1.0882, 0.4050 ]
         h = fitHMM obs def :: GaussianHMM
+        h' = fitHMMBag [obs] def :: GaussianHMM
     print h
+    print h'
 
 test2 :: IO ()
 test2 = do
