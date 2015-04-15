@@ -1,7 +1,12 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE TypeFamilies #-}
-module AI.HMM.GMM where
+module AI.HMM.GMM
+    ( GMMHMM(..)
+    , MStepOpt(..)
+    , module AI.HMM.Class
+    , module AI.HMM.Type
+    ) where
 
 import Control.Arrow (first)
 import Control.Monad (liftM, replicateM, forM_)

@@ -2,6 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module AI.GMM where
 
+import Algorithms.GLasso
 import Control.Arrow (first)
 import Control.Lens (makeLenses)
 import Control.Monad
@@ -9,6 +10,7 @@ import Control.Monad.ST
 import Data.Default.Class
 import qualified Data.Matrix.Unboxed as MU
 import qualified Data.Vector as V
+import qualified Data.Vector.Generic as G
 import qualified Data.Vector.Unboxed as U
 import System.Random.MWC
 
@@ -67,7 +69,10 @@ fitGMM xs opt = loop (_nIter opt) initM
                 let w = U.slice (k*n) n ws
                     (mean, cov) = weightedMeanDiagCov w xs
                 in (U.sum w, mvnDiag mean cov)
-        _ -> undefined
+        LassoCov -> f . V.generate s $ \k ->
+                let w = U.slice (k*n) n ws
+                    (mean, cov) = weightedMeanCovMatrix w xs
+                in (U.sum w, mvn mean $ G.convert $ fst $ glasso (G.length mean) (G.convert cov) 0.1)
 
     initM = case _initialization opt of
         Fixed m -> m
@@ -96,5 +101,5 @@ test = do
                              , [-40,-4]
                              , [0,100]
                              ]
-        h = fitGMM obs def
+        h = fitGMM obs def { _covEstimator = LassoCov }
     print h
